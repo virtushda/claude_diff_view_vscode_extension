@@ -119,14 +119,15 @@ export function registerAllCommands(deps: CommandDeps): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('ai-cli-diff-view.acceptAllHunks', async () => {
-      const filePath = getActiveDiffFilePath();
-      if (!filePath) {
+    vscode.commands.registerCommand('ai-cli-diff-view.acceptAllHunks', async (filePath?: string) => {
+      const targetPath =
+        typeof filePath === 'string' && filePath.length > 0 ? filePath : getActiveDiffFilePath();
+      if (!targetPath) {
         vscode.window.showWarningMessage('No active inline diff.');
         return;
       }
-      await diffManager.accept(filePath);
-      vscode.window.showInformationMessage(`Accepted all changes: ${path.basename(filePath)}`);
+      await diffManager.accept(targetPath);
+      vscode.window.showInformationMessage(`Accepted all changes: ${path.basename(targetPath)}`);
     })
   );
 

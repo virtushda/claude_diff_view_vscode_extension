@@ -67,6 +67,10 @@ export class SessionPanelProvider implements vscode.WebviewViewProvider {
         void vscode.commands.executeCommand('ai-cli-diff-view.openPendingFile', msg.path);
       } else if (msg.command === 'installHooks') {
         void vscode.commands.executeCommand('ai-cli-diff-view.installHooks');
+      } else if (msg.command === 'acceptFile' && msg.path && typeof msg.path === 'string') {
+        void vscode.commands.executeCommand('ai-cli-diff-view.acceptAllHunks', msg.path);
+      } else if (msg.command === 'acceptAllChanges') {
+        void vscode.commands.executeCommand('ai-cli-diff-view.acceptAllChanges');
       }
     });
     this.render();
@@ -86,6 +90,7 @@ export class SessionPanelProvider implements vscode.WebviewViewProvider {
 
   private buildHtml(iconBase: string): string {
     const pending = this.diffManager.getPendingFiles();
+    const hasPending = pending.length > 0;
     const treeModel = buildPendingTreeModel(pending);
     const pendingTreeHtml =
       pending.length === 0 ? '' : renderPendingTreeHtml(treeModel, 0, iconBase);
@@ -119,7 +124,10 @@ export class SessionPanelProvider implements vscode.WebviewViewProvider {
         <span>Pending changes</span>
         <span class="badge">${pending.length}</span>
       </div>
-      <div class="file-tree" id="file-tree">${pendingTreeHtml}</div>`;
+      <div class="file-tree" id="file-tree">${pendingTreeHtml}</div>
+      <div class="context-menu" id="tree-ctx-menu">
+        <button type="button" class="ctx-item" id="ctx-accept-file">Accept all changes</button>
+      </div>`;
 
     const hookDet = detectOurClaudeHooks(this.context.extensionUri.fsPath);
     const hooksOk = hooksFullyActive(hookDet);
@@ -382,6 +390,52 @@ export class SessionPanelProvider implements vscode.WebviewViewProvider {
     margin-top: 12px;
     margin-bottom: 0;
   }
+
+  .btn-accept-all {
+    width: 100%;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--vscode-button-foreground);
+    background: var(--vscode-button-background);
+    transition: filter 0.12s;
+    margin-bottom: 10px;
+  }
+  .btn-accept-all:hover { filter: brightness(1.06); }
+  .btn-accept-all:active { filter: brightness(0.95); }
+  .btn-accept-all:disabled { opacity: 0.55; cursor: default; filter: none; }
+
+  .context-menu {
+    position: absolute;
+    display: none;
+    min-width: 180px;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-widget-border, rgba(128,128,128,0.35));
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+    padding: 4px;
+    z-index: 20;
+  }
+  .ctx-item {
+    width: 100%;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+  }
+  .ctx-item:hover {
+    background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.1));
+  }
 </style>
 </head>
 <body>
@@ -392,6 +446,9 @@ export class SessionPanelProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
   <div class="bottom-stick">
+    <button type="button" class="btn-accept-all" id="btn-accept-all" ${
+      hasPending ? '' : 'disabled'
+    }>Accept all changes${hasPending ? ` (${pending.length})` : ''}</button>
     <button type="button" class="btn-install" id="btn-install" title="Write hooks to ~/.claude/settings.json">
       ${escapeHtml(installLabel)}
     </button>
@@ -403,16 +460,76 @@ export class SessionPanelProvider implements vscode.WebviewViewProvider {
     (function bindFileTree() {
       var el = document.getElementById('file-tree');
       if (!el) return;
+      var menu = document.getElementById('tree-ctx-menu');
+      var acceptItem = document.getElementById('ctx-accept-file');
+      var ctxPath = null;
+
+      function closeMenu() {
+        if (!menu) return;
+        menu.style.display = 'none';
+        ctxPath = null;
+      }
+
+      function openMenu(x, y) {
+        if (!menu) return;
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+        menu.style.display = 'block';
+      }
+
       el.querySelectorAll('.tree-row-file').forEach(function (btn) {
         btn.addEventListener('click', function () {
+          closeMenu();
           var p = btn.getAttribute('data-path');
           if (p) vscode.postMessage({ command: 'openFile', path: p });
         });
+        btn.addEventListener('contextmenu', function (ev) {
+          if (!menu) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          var p = btn.getAttribute('data-path');
+          if (!p) return;
+          ctxPath = p;
+          openMenu(ev.pageX, ev.pageY);
+        });
+      });
+
+      if (acceptItem) {
+        acceptItem.addEventListener('click', function () {
+          if (ctxPath) {
+            vscode.postMessage({ command: 'acceptFile', path: ctxPath });
+          }
+          closeMenu();
+        });
+      }
+
+      document.addEventListener('click', function (ev) {
+        if (!menu || menu.style.display === 'none') return;
+        if (!menu.contains(ev.target)) {
+          closeMenu();
+        }
+      });
+      document.addEventListener('contextmenu', function (ev) {
+        if (!menu || menu.style.display === 'none') return;
+        if (!menu.contains(ev.target)) {
+          closeMenu();
+        }
+      });
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') {
+          closeMenu();
+        }
       });
     })();
     document.getElementById('btn-install').addEventListener('click', function () {
       vscode.postMessage({ command: 'installHooks' });
     });
+    var btnAcceptAll = document.getElementById('btn-accept-all');
+    if (btnAcceptAll) {
+      btnAcceptAll.addEventListener('click', function () {
+        vscode.postMessage({ command: 'acceptAllChanges' });
+      });
+    }
   </script>
 </body>
 </html>`;
